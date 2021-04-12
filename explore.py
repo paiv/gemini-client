@@ -18,13 +18,16 @@ GeminiResponse = namedtuple('GeminiResponse',
 class GeminiClient:
     'gemini://gemini.circumlunar.space/docs/specification.gmi'
 
+    def __init__(self, client_identity=None):
+        self.client_identity = client_identity
+
     def get(self, uri, port=None):
         def redirected(uri, level, history):
             if level > 5:
                 raise Exception((uri, history))
 
             try:
-                with GeminiTransport(uri, port) as cli:
+                with GeminiTransport(uri, port, self.client_identity) as cli:
                     r = cli.get(uri)
             except:
                 raise Exception((uri, history))
@@ -37,7 +40,7 @@ class GeminiClient:
             elif 10 <= r.status <= 19:
                 return GeminiResponse(uri=r.uri, status=r.status, meta=r.meta, content=r.content, needs_input=True)
             else:
-                if level:
+                if history:
                     raise Exception((r.status, r.meta, uri, history))
                 raise Exception((r.status, r.meta, uri))
 
@@ -45,7 +48,7 @@ class GeminiClient:
 
 
 class GeminiTransport:
-    def __init__(self, uri, port=None):
+    def __init__(self, uri, port=None, client_identity=None):
         url = urlparse(uri)
         self.hostname = url.hostname or uri.strip()
         self.hostport = port or url.port or 1965
@@ -53,6 +56,8 @@ class GeminiTransport:
         context = ssl.create_default_context()
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
+        if client_identity:
+            context.load_cert_chain(client_identity)
         self.tls_context = context
         self.tls_version = None
 
@@ -102,10 +107,13 @@ class GeminiTransport:
         if not buf.endswith(b'\r\n'):
             raise Exception(buf)
 
-        r = buf.decode('utf-8').strip().split(maxsplit=1)
+        s = buf.decode('utf-8').strip()
+        r = s.split(maxsplit=1)
         if len(r) == 2:
             code, meta = r
             return int(code, 10), meta
+        elif len(r) == 1:
+            return int(s, 10), ''
         raise Exception(buf)
 
     def _read_response_content(self):
@@ -124,13 +132,13 @@ def _urljoin(url, path, query=None):
     return urlunsplit((p[0], p[1], path or p[2], query or '', ''))
 
 
-def main(uri, port, *args):
+def main(uri, port, client_identity, *args):
     def dump(r):
         logger.info(f'status {r.status} {r.meta!r}')
         if r.content:
             print(r.content.rstrip())
 
-    cli = GeminiClient()
+    cli = GeminiClient(client_identity)
     r = cli.get(uri, port=port)
     dump(r)
     while r.needs_input:
@@ -145,10 +153,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('uri', help='gemini:// URI')
     parser.add_argument('-p', '--port', type=int, help='Override default port 1965')
+    parser.add_argument('-i', '--identity', metavar='ID', help='Client certificate file (.pem)')
     parser.add_argument('-v', '--verbose', action='store_true')
     args = parser.parse_args()
 
     if args.verbose:
         logger.level = logging.INFO
 
-    main(uri=args.uri, port=args.port)
+    main(uri=args.uri, port=args.port, client_identity=args.identity)
