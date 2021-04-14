@@ -2,10 +2,10 @@ Basic client for [Project Gemini](https://gemini.circumlunar.space/)
 ==
 
 ```
-usage: explore.py [-h] [-p PORT] [-i ID] [-o FILE] [-v] uri
+usage: explore.py [-h] [-p PORT] [-i ID] [-o FILE] [-v] url
 
 positional arguments:
-  uri                   gemini:// URI
+  url                   gemini:// URL
 
 optional arguments:
   -h, --help            show this help message and exit

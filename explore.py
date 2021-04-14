@@ -14,7 +14,7 @@ logger = logging.getLogger('GeminiClient')
 
 
 GeminiResponse = namedtuple('GeminiResponse',
-    'uri status meta content needs_input', defaults=(False,))
+    'url status meta content needs_input', defaults=(False,))
 
 
 class GeminiClient:
@@ -23,37 +23,37 @@ class GeminiClient:
     def __init__(self, client_identity=None):
         self.client_identity = client_identity
 
-    def get(self, uri, port=None, stream=False):
-        def redirected(uri, level, history):
+    def get(self, url, port=None, stream=False):
+        def redirected(url, level, history):
             if level > 5:
-                raise Exception((uri, history))
+                raise Exception((url, history))
 
             try:
-                with GeminiTransport(uri, port, self.client_identity) as cli:
-                    r = cli.get(uri, stream=stream)
+                with GeminiTransport(url, port, self.client_identity) as cli:
+                    r = cli.get(url, stream=stream)
             except:
-                raise Exception((uri, history))
+                raise Exception((url, history))
 
             if 20 <= r.status <= 29:
                 return r
             elif 30 <= r.status <= 39:
                 history.append(r)
-                return redirected(_urljoin(uri, r.meta), level+1, history)
+                return redirected(_urljoin(url, r.meta), level+1, history)
             elif 10 <= r.status <= 19:
-                return GeminiResponse(uri=r.uri, status=r.status, meta=r.meta, content=r.content, needs_input=True)
+                return GeminiResponse(url=r.url, status=r.status, meta=r.meta, content=r.content, needs_input=True)
             else:
                 if history:
-                    raise Exception((r.status, r.meta, uri, history))
-                raise Exception((r.status, r.meta, uri))
+                    raise Exception((r.status, r.meta, url, history))
+                raise Exception((r.status, r.meta, url))
 
-        return redirected(uri, 0, list())
+        return redirected(url, 0, list())
 
 
 class GeminiTransport:
-    def __init__(self, uri, port=None, client_identity=None):
-        url = urlparse(uri)
-        self.hostname = url.hostname or uri.strip()
-        self.hostport = port or url.port or 1965
+    def __init__(self, url, port=None, client_identity=None):
+        uri = urlparse(url)
+        self.hostname = uri.hostname or url.strip()
+        self.hostport = port or uri.port or 1965
 
         context = ssl.create_default_context()
         context.check_hostname = False
@@ -83,21 +83,21 @@ class GeminiTransport:
             self.s.close()
             self.s = None
 
-    def get(self, uri, stream=False):
-        if not '://' in uri:
-            uri = 'gemini://' + uri
-        logger.info(f'get {uri!r}')
-        self._write_request(uri)
+    def get(self, url, stream=False):
+        if not '://' in url:
+            url = 'gemini://' + url
+        logger.info(f'get {url!r}')
+        self._write_request(url)
         code, meta = self._read_response_status()
         codec = self._get_codec(meta)
         body = self._read_response_content(codec, stream=stream)
         if stream:
             self.ss = None
             self.s = None
-        return GeminiResponse(uri=uri, status=code, meta=meta, content=body)
+        return GeminiResponse(url=url, status=code, meta=meta, content=body)
 
-    def _write_request(self, uri):
-        r = uri.encode('utf-8') + b'\r\n'
+    def _write_request(self, url):
+        r = url.encode('utf-8') + b'\r\n'
         self.ss.write(r)
 
     def _read_response_status(self):
@@ -147,7 +147,7 @@ def _urljoin(url, path, query=None):
     return urlunsplit((p[0], p[1], path or p[2], query or '', ''))
 
 
-def main(uri, port, client_identity, outfile):
+def main(url, port, client_identity, outfile):
     outstream = None
     def dump_stream(r, buffer_size=1):
         nonlocal outstream
@@ -164,19 +164,19 @@ def main(uri, port, client_identity, outfile):
         r.content.close()
 
     cli = GeminiClient(client_identity)
-    r = cli.get(uri, port=port, stream=True)
+    r = cli.get(url, port=port, stream=True)
     dump_stream(r)
     while r.needs_input:
         s = input(r.meta + '> ')
-        uri = _urljoin(r.uri, '', query=urlquote(s))
-        r = cli.get(uri, port=port, stream=True)
+        url = _urljoin(r.url, '', query=urlquote(s))
+        r = cli.get(url, port=port, stream=True)
         dump_stream(r)
 
 
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('uri', help='gemini:// URI')
+    parser.add_argument('url', help='gemini:// URL')
     parser.add_argument('-p', '--port', type=int, help='Override default port 1965')
     parser.add_argument('-i', '--identity', metavar='ID', help='Client certificate file (.pem)')
     parser.add_argument('-o', '--output', metavar='FILE', help='Output file name')
@@ -186,5 +186,5 @@ if __name__ == '__main__':
     if args.verbose:
         logger.level = logging.INFO
 
-    main(uri=args.uri, port=args.port, client_identity=args.identity,
+    main(url=args.url, port=args.port, client_identity=args.identity,
         outfile=args.output or sys.stdout)
