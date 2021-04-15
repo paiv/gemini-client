@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import codecs
 import logging
+import os
 import readline
 import socket
 import ssl
@@ -11,10 +12,6 @@ from collections import namedtuple
 
 logging.basicConfig()
 logger = logging.getLogger('GeminiClient')
-
-
-GeminiResponse = namedtuple('GeminiResponse',
-    'url status meta content needs_input', defaults=(False,))
 
 
 class GeminiClient:
@@ -40,7 +37,8 @@ class GeminiClient:
                 history.append(r)
                 return redirected(_urljoin(url, r.meta), level+1, history)
             elif 10 <= r.status <= 19:
-                return GeminiResponse(url=r.url, status=r.status, meta=r.meta, content=r.content, needs_input=True)
+                r.needs_input = True
+                return r
             else:
                 if history:
                     raise Exception((r.status, r.meta, url, history))
@@ -49,8 +47,57 @@ class GeminiClient:
         return redirected(url, 0, list())
 
 
+class GeminiResponse:
+    def __init__(self, socket, ssocket, url, status, meta, stream=False):
+        self.s = socket
+        self.ss = ssocket
+        self.url = url
+        self.status = status
+        self.meta = meta
+        self.stream = stream
+        self.needs_input = False
+        self.has_content = 20 <= status <= 29
+        self.content = None
+
+        codec = self._get_codec(meta)
+        self.is_binary = codec is None
+        if self.has_content:
+            reader = codec(self.ss, errors='ignore') if codec else self.ss
+            if stream:
+                self.content = reader
+            else:
+                self.content = reader.read()
+                self.close()
+        else:
+            self.close()
+
+    def close(self):
+        if self.ss:
+            self.ss.close()
+        if self.s:
+            self.s.close()
+
+    def _get_codec(self, meta):
+        parts = meta.lower().split(';')
+        mime = parts[0]
+        if mime and (not mime.startswith('text/')):
+            return None
+        codec = 'utf-8'
+        if len(parts) > 1:
+            for param in parts[1:]:
+                nv = param.split('=', maxsplit=1)
+                if len(nv) == 2:
+                    if nv[0].strip() == 'charset':
+                        codec = nv[1].strip()
+        try:
+            return codecs.getreader(codec)
+        except LookupError:
+            return None
+
+
 class GeminiTransport:
     def __init__(self, url, port=None, client_identity=None):
+        self.is_detached = False
         uri = urlparse(url)
         self.hostname = uri.hostname or url.strip()
         self.hostport = port or uri.port or 1965
@@ -76,12 +123,11 @@ class GeminiTransport:
         self.tls_version = self.ss.version()
 
     def close(self):
-        if self.ss:
-            self.ss.close()
-            self.ss = None
-        if self.s:
-            self.s.close()
-            self.s = None
+        if not self.is_detached:
+            if self.ss:
+                self.ss.close()
+            if self.s:
+                self.s.close()
 
     def get(self, url, stream=False):
         if not '://' in url:
@@ -89,12 +135,8 @@ class GeminiTransport:
         logger.info(f'get {url!r}')
         self._write_request(url)
         code, meta = self._read_response_status()
-        codec = self._get_codec(meta)
-        body = self._read_response_content(codec, stream=stream)
-        if stream:
-            self.ss = None
-            self.s = None
-        return GeminiResponse(url=url, status=code, meta=meta, content=body)
+        self.is_detached = True
+        return GeminiResponse(socket=self.s, ssocket=self.ss, url=url, status=code, meta=meta, stream=stream)
 
     def _write_request(self, url):
         r = url.encode('utf-8') + b'\r\n'
@@ -119,26 +161,6 @@ class GeminiTransport:
             return int(s, 10), ''
         raise Exception(buf)
 
-    def _get_codec(self, meta):
-        parts = meta.lower().split(';')
-        codec = 'utf-8'
-        if len(parts) > 1:
-            for param in parts[1:]:
-                nv = param.split('=', maxsplit=1)
-                if len(nv) == 2:
-                    if nv[0].strip() == 'charset':
-                        codec = nv[1].strip()
-        try:
-            return codecs.getreader(codec)
-        except LookupError:
-            return None
-
-    def _read_response_content(self, codec, stream=False):
-        reader = codec(self.ss, errors='ignore') if codec else self.ss
-        if stream:
-            return reader
-        return reader.read()
-
 
 def _urljoin(url, path, query=None):
     if path and ('://' in path):
@@ -147,21 +169,33 @@ def _urljoin(url, path, query=None):
     return urlunsplit((p[0], p[1], path or p[2], query or '', ''))
 
 
-def main(url, port, client_identity, outfile):
+def main(url, port, client_identity, outfile, remote_name):
+    def open_output(outfile, binary):
+        logger.info(f'open_output {outfile} binary? {binary}')
+        so = outfile
+        if outfile is None:
+            if remote_name:
+                uri = urlparse(url)
+                outfile = os.path.basename(uri.path)
+                so = open(outfile, 'wb' if binary else 'w')
+            else:
+                so = sys.stdout.buffer if binary else sys.stdout
+        elif isinstance(outfile, str):
+            so = open(outfile, 'wb' if binary else 'w')
+        return so
+
     outstream = None
     def dump_stream(r, buffer_size=1):
         nonlocal outstream
         logger.info(f'status {r.status} {r.meta!r}')
-        if not r.content: return
+        if not r.has_content: return
         if outstream is None:
-            outstream = outfile
-            if isinstance(outfile, str):
-                outstream = open(outfile, 'w')
+            outstream = open_output(outfile, binary=r.is_binary)
         while True:
             chunk = r.content.read(buffer_size)
             if not chunk: break
             outstream.write(chunk)
-        r.content.close()
+        r.close()
 
     cli = GeminiClient(client_identity)
     r = cli.get(url, port=port, stream=True)
@@ -180,6 +214,7 @@ if __name__ == '__main__':
     parser.add_argument('-p', '--port', type=int, help='Override default port 1965')
     parser.add_argument('-i', '--identity', metavar='ID', help='Client certificate file (.pem)')
     parser.add_argument('-o', '--output', metavar='FILE', help='Output file name')
+    parser.add_argument('-O', '--remote-name', action='store_true', help='Use file name from the URL')
     parser.add_argument('-v', '--verbose', action='store_true')
     args = parser.parse_args()
 
@@ -187,4 +222,4 @@ if __name__ == '__main__':
         logger.level = logging.INFO
 
     main(url=args.url, port=args.port, client_identity=args.identity,
-        outfile=args.output or sys.stdout)
+        outfile=args.output, remote_name=args.remote_name)

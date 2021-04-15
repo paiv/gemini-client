@@ -2,7 +2,7 @@ Basic client for [Project Gemini](https://gemini.circumlunar.space/)
 ==
 
 ```
-usage: explore.py [-h] [-p PORT] [-i ID] [-o FILE] [-v] url
+usage: explore.py [-h] [-p PORT] [-i ID] [-o FILE] [-O] [-v] url
 
 positional arguments:
   url                   gemini:// URL
@@ -13,5 +13,6 @@ optional arguments:
   -i ID, --identity ID  Client certificate file (.pem)
   -o FILE, --output FILE
                         Output file name
+  -O, --remote-name     Use file name from the URL
   -v, --verbose
 ```
