@@ -7,7 +7,6 @@ import socket
 import ssl
 import sys
 from urllib.parse import quote as urlquote, urlparse, urlsplit, urlunsplit
-from collections import namedtuple
 
 
 logging.basicConfig()
@@ -17,19 +16,40 @@ logger = logging.getLogger('GeminiClient')
 class GeminiClient:
     'gemini://gemini.circumlunar.space/docs/specification.gmi'
 
+    STATUS_CODES = {
+        10: 'INPUT',
+        11: 'SENSITIVE INPUT',
+        20: 'SUCCESS',
+        30: 'REDIRECT - TEMPORARY',
+        31: 'REDIRECT - PERMANENT',
+        40: 'TEMPORARY FAILURE',
+        41: 'SERVER UNAVAILABLE',
+        42: 'CGI ERROR',
+        43: 'PROXY ERROR',
+        44: 'SLOW DOWN',
+        50: 'PERMANENT FAILURE',
+        51: 'NOT FOUND',
+        52: 'GONE',
+        53: 'PROXY REQUEST REFUSED',
+        59: 'BAD REQUEST',
+        60: 'CLIENT CERTIFICATE REQUIRED',
+        61: 'CERTIFICATE NOT AUTHORISED',
+        62: 'CERTIFICATE NOT VALID',
+    }
+
     def __init__(self, client_identity=None):
         self.client_identity = client_identity
 
     def get(self, url, port=None, stream=False):
         def redirected(url, level, history):
             if level > 5:
-                raise Exception((url, history))
+                raise GeminiClientError((url, history))
 
             try:
                 with GeminiTransport(url, port, self.client_identity) as cli:
                     r = cli.get(url, stream=stream)
             except:
-                raise Exception((url, history))
+                raise GeminiClientError((url, history))
 
             if 20 <= r.status <= 29:
                 return r
@@ -40,11 +60,13 @@ class GeminiClient:
                 r.needs_input = True
                 return r
             else:
-                if history:
-                    raise Exception((r.status, r.meta, url, history))
-                raise Exception((r.status, r.meta, url))
+                r.raise_for_status(history=history)
 
         return redirected(url, 0, list())
+
+
+class GeminiClientError (Exception):
+    pass
 
 
 class GeminiResponse:
@@ -93,6 +115,18 @@ class GeminiResponse:
             return codecs.getreader(codec)
         except LookupError:
             return None
+
+    def raise_for_status(self, history=None):
+        desc = GeminiClient.STATUS_CODES.get(self.status)
+        if desc:
+            status = f'{self.status} {desc}'
+        elif not self.status:
+            status = str(self.status)
+        else:
+            status = self.status
+        err = [status, self.meta, self.url, history]
+        err = tuple(filter(None, err))
+        raise GeminiClientError(err)
 
 
 class GeminiTransport:
@@ -150,7 +184,7 @@ class GeminiTransport:
             if not s: break
 
         if not buf.endswith(b'\r\n'):
-            raise Exception(buf)
+            raise GeminiClientError(buf)
 
         s = buf.decode('utf-8').strip()
         r = s.split(maxsplit=1)
@@ -159,7 +193,7 @@ class GeminiTransport:
             return int(code, 10), meta
         elif len(r) == 1:
             return int(s, 10), ''
-        raise Exception(buf)
+        raise GeminiClientError(buf)
 
 
 def _urljoin(url, path, query=None):
@@ -171,7 +205,6 @@ def _urljoin(url, path, query=None):
 
 def main(url, port, client_identity, outfile, remote_name):
     def open_output(outfile, binary):
-        logger.info(f'open_output {outfile} binary? {binary}')
         so = outfile
         if outfile is None:
             if remote_name:
