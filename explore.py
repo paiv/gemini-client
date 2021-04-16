@@ -51,16 +51,18 @@ class GeminiClient:
             except:
                 raise GeminiClientError((url, history))
 
+            logger.info(r)
             if 20 <= r.status <= 29:
+                r.history = history
                 return r
             elif 30 <= r.status <= 39:
+                r.close()
                 history.append(r)
                 return redirected(_urljoin(url, r.meta), level+1, history)
             elif 10 <= r.status <= 19:
                 r.needs_input = True
-                return r
-            else:
-                r.raise_for_status(history=history)
+            r.history = history
+            return r
 
         return redirected(url, 0, list())
 
@@ -70,13 +72,14 @@ class GeminiClientError (Exception):
 
 
 class GeminiResponse:
-    def __init__(self, socket, ssocket, url, status, meta, stream=False):
+    def __init__(self, socket, ssocket, url, status, meta, stream=False, history=None):
         self.s = socket
         self.ss = ssocket
         self.url = url
         self.status = status
         self.meta = meta
         self.stream = stream
+        self.history = history
         self.needs_input = False
         self.has_content = 20 <= status <= 29
         self.content = None
@@ -92,6 +95,13 @@ class GeminiResponse:
                 self.close()
         else:
             self.close()
+
+    def __repr__(self):
+        desc = GeminiClient.STATUS_CODES.get(self.status)
+        status = f'{self.status} {desc}' if desc else self.status
+        sf = [status, self.meta, self.url]
+        sf = tuple(filter(None, sf))
+        return f'GeminiResponse{sf}'
 
     def close(self):
         if self.ss:
@@ -116,7 +126,10 @@ class GeminiResponse:
         except LookupError:
             return None
 
-    def raise_for_status(self, history=None):
+    def raise_for_status(self):
+        if 20 <= self.status <= 29:
+            return
+        self.close()
         desc = GeminiClient.STATUS_CODES.get(self.status)
         if desc:
             status = f'{self.status} {desc}'
@@ -124,7 +137,7 @@ class GeminiResponse:
             status = str(self.status)
         else:
             status = self.status
-        err = [status, self.meta, self.url, history]
+        err = [status, self.meta, self.url, self.history]
         err = tuple(filter(None, err))
         raise GeminiClientError(err)
 
@@ -166,7 +179,7 @@ class GeminiTransport:
     def get(self, url, stream=False):
         if not '://' in url:
             url = 'gemini://' + url
-        logger.info(f'get {url!r}')
+        logger.info(f'GET {url!r}')
         self._write_request(url)
         code, meta = self._read_response_status()
         self.is_detached = True
@@ -220,7 +233,7 @@ def main(url, port, client_identity, outfile, remote_name):
     outstream = None
     def dump_stream(r, buffer_size=1):
         nonlocal outstream
-        logger.info(f'status {r.status} {r.meta!r}')
+        r.raise_for_status()
         if not r.has_content: return
         if outstream is None:
             outstream = open_output(outfile, binary=r.is_binary)
