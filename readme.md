@@ -1,6 +1,8 @@
 Basic client for [Project Gemini](https://gemini.circumlunar.space/)
 ==
 
+[![standwithukraine](https://user-images.githubusercontent.com/196601/157247232-b1926a64-e859-4261-b0d1-73390e56df9c.svg)](https://ukrainewar.carrd.co/)
+
 ```
 usage: explore.py [-h] [-p PORT] [-i ID] [-o FILE] [-O] [-v] url
 
