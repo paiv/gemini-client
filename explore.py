@@ -126,8 +126,10 @@ class GeminiResponse:
         except LookupError:
             return None
 
-    def raise_for_status(self):
+    def raise_for_status(self, needs_input_ok=False):
         if 20 <= self.status <= 29:
+            return
+        if needs_input_ok and (10 <= self.status < 20):
             return
         self.close()
         desc = GeminiClient.STATUS_CODES.get(self.status)
@@ -233,7 +235,7 @@ def main(url, port, client_identity, outfile, remote_name):
     outstream = None
     def dump_stream(r, buffer_size=1):
         nonlocal outstream
-        r.raise_for_status()
+        r.raise_for_status(needs_input_ok=True)
         if not r.has_content: return
         if outstream is None:
             outstream = open_output(outfile, binary=r.is_binary)
